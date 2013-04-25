@@ -1,0 +1,16 @@
+# ~/google_appengine/dev_appserver.py .
+# ~/google_appengine/appcfg.py update .
+
+application: blog-gocircuit-org
+runtime: go
+api_version: go1
+version: n2
+
+handlers:
+
+- url: /\.appfs.*
+  script: _go_app
+  secure: always
+
+- url: /.*
+  script: _go_app

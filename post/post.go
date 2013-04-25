@@ -23,8 +23,24 @@ import (
 	"code.google.com/p/rsc/blog/atom"
 )
 
-func init() {
-	http.Handle("/static/", http.StripPrefix("/static/", http.FileServer(http.Dir(path.Join(os.Getenv("HOME"), "g0/src/github.com/petar/veranda/maymounkov_app/static/")))))
+// To find the PlusPage value of a Google Plus post:
+// https://www.googleapis.com/plus/v1/people/{YOUR_PLUS_ID}/activities/public?key={YOUR_PLUS_KEY}
+
+type Config struct {
+	Name       string
+	Email      string
+	Account    string        // Google accounts username
+	PlusID     string        // Google Plus ID of owner
+	PlusKey    string        // Google Plus Key of owner
+	PublicURL  string        // Public URL of app web site
+	FeedID     string
+	FeedTitle  string        // Atom feed title
+}
+
+var config *Config
+
+func Start(cfg *Config) {
+	config = cfg
 	http.HandleFunc("/", serve)
 	http.Handle("/feeds/posts/default", http.RedirectHandler("/feed.atom", http.StatusFound))
 }
@@ -100,19 +116,6 @@ func (d *PostData) IsDraft() bool {
 	return d.Date.IsZero() || d.Date.After(time.Now())
 }
 
-// To find PlusPage value:
-// https://www.googleapis.com/plus/v1/people/115478988589452092148/activities/public?key=AIzaSyC7WQUkWnmx7WZQHZWuhjFzQbuCgnJzpl4
-//
-
-const (
-	devOwner  = "xxx"
-	owner     = "petarm"
-	plusPetar = "115478988589452092148"
-	plusKey   = "AIzaSyC7WQUkWnmx7WZQHZWuhjFzQbuCgnJzpl4"
-	feedID    = "tag:maymounkov.org,2012:maymounkov.org"
-	publicURL = "http://maymounkov.org"
-)
-
 var replacer = strings.NewReplacer(
 	"⁰", "<sup>0</sup>",
 	"¹", "<sup>1</sup>",
@@ -176,9 +179,8 @@ func serve(w http.ResponseWriter, req *http.Request) {
 	}
 	
 	user := ctxt.User()
-	// isOwner = owner in AppEngine or using devweb
-	// test@example.com
-	isOwner := ctxt.User() == owner || ctxt.User() == devOwner || len(os.Args) >= 2 && os.Args[1] == "LISTEN_STDIN"
+	// isOwner = owner in AppEngine
+	isOwner := ctxt.User() == config.Account || len(os.Args) >= 2 && os.Args[1] == "LISTEN_STDIN"
 	
 	// URL is a slash (AppEngine, dev mode or draft mode)
 	if p == "" || p == "/" || p == "/draft" {
@@ -286,8 +288,8 @@ func loadPost(c *fs.Context, name string, req *http.Request) (meta *PostData, ar
 	meta = &PostData{
 		Name:       name,
 		Title:      "TITLE HERE",
-		PlusAuthor: plusPetar,
-		PlusAPIKey: plusKey,
+		PlusAuthor: config.PlusID,
+		PlusAPIKey: config.PlusKey,
 		HostURL:    hostURL(req),
 	}
 
@@ -421,15 +423,10 @@ func toc(w http.ResponseWriter, req *http.Request, draft bool, isOwner bool, use
 }
 
 func hostURL(req *http.Request) string {
-	/*
-	if strings.HasPrefix(req.Host, "localhost") {
-		return "http://localhost:8080"
-	}
-	*/
 	if strings.Index(req.Host, "localhost") >= 0 {
 		return "http://localhost:8000"
 	}
-	return publicURL
+	return config.PublicURL
 }
 
 func atomfeed(w http.ResponseWriter, req *http.Request) {
@@ -470,13 +467,13 @@ func atomfeed(w http.ResponseWriter, req *http.Request) {
 		}
 		
 		feed := &atom.Feed{
-			Title: "population!algorithms",
-			ID:    feedID,
+			Title: config.FeedTitle,
+			ID:    config.FeedID,
 			Updated: atom.Time(show[0].Date.Time),
 			Author: &atom.Person{
-				Name: "Petar Maymounkov",
-				URI: "https://plus.google.com/" + plusPetar,
-				Email: "petar@maymounkov.org",
+				Name:  config.Name,
+				URI:   "https://plus.google.com/" + config.PlusID,
+				Email: config.Email,
 			},
 			Link: []atom.Link{
 				{Rel: "self", Href: hostURL(req) + "/feed.atom"},
