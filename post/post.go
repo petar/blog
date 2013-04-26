@@ -466,6 +466,17 @@ func atomfeed(w http.ResponseWriter, req *http.Request) {
 			}
 		}
 		
+		// 
+		//	Title
+		//	ID
+		//	Updated
+		//	Author
+		//		Name
+		//		URI
+		//		Email
+		//	Link[]
+		//		Rel
+		//		Href
 		feed := &atom.Feed{
 			Title: config.FeedTitle,
 			ID:    config.FeedID,
