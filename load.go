@@ -1,4 +1,4 @@
-package spkzy
+package blog
 
 import (
 	"fmt"
@@ -10,7 +10,7 @@ import (
 	// The appfs server, running on AppEngine, reads the user and password from the file "/.password" within appfs.
 	_ "code.google.com/p/rsc/appfs/server"
 
-	"github.com/petar/spkzy/post"
+	"github.com/petar/blog/post"
 )
 
 func Start(cfg *post.Config) {
