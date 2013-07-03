@@ -11,7 +11,6 @@ import (
 	"fmt"
 	"html/template"
 	"net/http"
-	"os"
 	"path"
 	"runtime/debug"
 	"sort"
@@ -21,6 +20,9 @@ import (
 	"code.google.com/p/rsc/appfs/fs"
 	"code.google.com/p/rsc/appfs/proto"
 	"code.google.com/p/rsc/blog/atom"
+
+	ae  "appengine"
+	aeu "appengine/user"
 )
 
 // To find the PlusPage value of a Google Plus post:
@@ -46,6 +48,7 @@ func Start(cfg *Config) {
 }
 
 var funcMap = template.FuncMap{
+	"eq":     func(x, y string) bool { return x == y },
 	"now":    time.Now,
 	"date":   timeFormat,
 	"join":   path.Join,
@@ -90,6 +93,8 @@ type PostData struct {
 	Summary  string
 	Favorite bool
 	NotInTOC bool
+	Aux      string
+	Author   string
 
 	Reader []string
 
@@ -180,7 +185,7 @@ func serve(w http.ResponseWriter, req *http.Request) {
 
 	user := ctxt.User()
 	// isOwner = owner in AppEngine
-	isOwner := ctxt.User() == config.Account || len(os.Args) >= 2 && os.Args[1] == "LISTEN_STDIN"
+	isOwner := aeu.IsAdmin(ae.NewContext(req)) || ctxt.User() == config.Account
 
 	// URL is a slash (AppEngine, dev mode or draft mode)
 	if p == "" || p == "/" || p == "/draft" {
@@ -189,7 +194,7 @@ func serve(w http.ResponseWriter, req *http.Request) {
 			notfound(ctxt, w, req)
 			return
 		}
-		toc(w, req, p == "/draft", isOwner, user) // ??
+		toc(w, req, p == "/draft", isOwner, user)
 		return
 	}
 
@@ -331,6 +336,7 @@ type TocData struct {
 
 func toc(w http.ResponseWriter, req *http.Request, draft bool, isOwner bool, user string) {
 	c := fs.NewContext(req)
+	c.Criticalf("toc() draft=%v isOwner=%v user=%s", draft, isOwner, user)
 
 	var data []byte
 	keystr := fmt.Sprintf("blog:toc:%v", draft)

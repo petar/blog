@@ -11,11 +11,13 @@ import (
 	_ "code.google.com/p/rsc/appfs/server"
 
 	"github.com/petar/blog/post"
+	"mime"
 )
 
 func Start(cfg *post.Config) {
-	post.Start(cfg)
+	mime.AddExtensionType("ttf", "font/truetype")
 	http.HandleFunc("/admin/", Admin)
+	post.Start(cfg)
 }
 
 func Admin(w http.ResponseWriter, req *http.Request) {
