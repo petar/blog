@@ -302,7 +302,7 @@ func loadPost(c *fs.Context, name string, req *http.Request) (meta *PostData, ar
 		HostURL:    hostURL(req),
 	}
 
-	art, fi, err := c.Read("blog/post/" + name)
+	art, fi, err := c.Read(name)
 	if err != nil {
 		return nil, "", err
 	}
