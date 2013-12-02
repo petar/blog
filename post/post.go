@@ -6,6 +6,7 @@ package post
 
 import (
 	"bytes"
+	"container/list"
 	"encoding/json"
 	"encoding/xml"
 	"fmt"
@@ -21,7 +22,7 @@ import (
 	"code.google.com/p/rsc/appfs/proto"
 	"code.google.com/p/rsc/blog/atom"
 
-	ae  "appengine"
+	ae "appengine"
 	aeu "appengine/user"
 )
 
@@ -166,35 +167,37 @@ func serve(w http.ResponseWriter, req *http.Request) {
 
 	p := path.Clean("/" + req.URL.Path)
 
-	// If the site is accessed via its appspot URL, redirect to the cutsom URL
+	// ☻ If the site is accessed via its appspot URL, redirect to the cutsom URL
 	// to make sure links on the site are not broken.
-	/*
-		if strings.Contains(req.Host, "appspot.com") {
-			http.Redirect(w, req, "http://research.swtch.com" + p, http.StatusFound)
-		}*/
+	// if strings.Contains(req.Host, "appspot.com") {
+	// 	http.Redirect(w, req, "http://research.swtch.com" + p, http.StatusFound)
+	// }
 
+	// ☻ Correct paths missing the root slash
 	if p != req.URL.Path {
 		http.Redirect(w, req, p, http.StatusFound)
 		return
 	}
 
+	// ☻ Serve atom feed requests
 	if p == "/feed.atom" {
 		atomfeed(w, req)
 		return
 	}
 
+	// ☻ Determine whether logged user is guest or owner
 	user := ctxt.User()
 	// isOwner = owner in AppEngine
 	isOwner := aeu.IsAdmin(ae.NewContext(req)) || ctxt.User() == config.Account
 
-	// URL is a slash (AppEngine, dev mode or draft mode)
+	// ☻ If URL signifies the TOC page
 	if p == "" || p == "/" || p == "/draft" {
-		if p == "/draft" && user == "?" {
+		if p == "/draft" && user == "?" { // ☻ Prevent non-owners from viewing draft TOC pages
 			ctxt.Criticalf("/draft loaded by %s", user)
 			notfound(ctxt, w, req)
 			return
 		}
-		toc(w, req, p == "/draft", isOwner, user)
+		toc(w, req, p == "/draft", isOwner, user) // Render
 		return
 	}
 
@@ -289,10 +292,11 @@ func mainTemplate(c *fs.Context) *template.Template {
 	return t
 }
 
+// ☻ Parse a post file
 func loadPost(c *fs.Context, name string, req *http.Request) (meta *PostData, article string, err error) {
 	meta = &PostData{
 		Name:       name,
-		Title:      "TITLE HERE",
+		Title:      "¿Title?",
 		PlusAuthor: config.PlusID,
 		PlusAPIKey: config.PlusKey,
 		HostURL:    hostURL(req),
@@ -334,97 +338,147 @@ type TocData struct {
 	Posts     []*PostData
 }
 
+// toc traverses the file system to build the list of posts
 func toc(w http.ResponseWriter, req *http.Request, draft bool, isOwner bool, user string) {
 	c := fs.NewContext(req)
 	c.Criticalf("toc() draft=%v isOwner=%v user=%s", draft, isOwner, user)
 
+	// ☻ Compute cache key for this page
 	var data []byte
-	keystr := fmt.Sprintf("blog:toc:%v", draft)
+	keystr := fmt.Sprintf("blog:toc:%v", draft) // Key schema: "blog:toc:{true|false}" draft|non-draft
 	if req.FormValue("readdir") != "" {
-		keystr += ",readdir=" + req.FormValue("readdir")
+		keystr += ",readdir=" + req.FormValue("readdir") // If "readdir:" form value is given, add to cache key
 	}
 	if draft {
-		keystr += ",user=" + user
+		keystr += ",user=" + user // If in draft mode, add user to cache key
 	}
 
-	if key, ok := c.CacheLoad(keystr, "blog", &data); !ok {
-		c := fs.NewContext(req)
-		dir, err := c.ReadDir("blog/post")
-		if err != nil {
-			panic(err)
-		}
+	// ☻ Try to load the page from the cache,
+	if key, ok := c.CacheLoad(keystr, "blog", &data); ok {
+		w.Write(data)
+	} else {
+		gentoc(w, req, key, draft, isOwner, user)
+	}
+}
 
-		if req.FormValue("readdir") == "1" {
-			fmt.Fprintf(w, "%d dir entries\n", len(dir))
-			return
-		}
+func readDir(c *fs.Context, root string) ([]proto.FileInfo, error) {
+	return c.ReadDir(root)
+}
 
-		postCache := map[string]*PostData{}
-		if data, _, err := c.Read("blogcache"); err == nil {
-			if err := json.Unmarshal(data, &postCache); err != nil {
-				c.Criticalf("unmarshal blogcache: %v", err)
-			}
-		}
-
-		ch := make(chan *PostData, len(dir))
-		const par = 20
-		var limit = make(chan bool, par)
-		for i := 0; i < par; i++ {
-			limit <- true
-		}
-		for _, d := range dir {
-			if meta := postCache[d.Name]; meta != nil && meta.FileModTime.Equal(d.ModTime) && meta.FileSize == d.Size {
-				ch <- meta
-				continue
-			}
-
-			<-limit
-			go func(d proto.FileInfo) {
-				defer func() { limit <- true }()
-				meta, _, err := loadPost(c, d.Name, req)
-				if err != nil {
-					// Should not happen: we just listed the directory.
-					c.Criticalf("loadPost %s: %v", d.Name, err)
-					return
+// readDirEllipses returns the file infos of all files descendent to root, and
+// FileInfo.Name indicates the full file paths relative to root.
+func readDirEllipses(c *fs.Context, root string) (r []proto.FileInfo, err error) {
+	var q list.List // Queue of root-relative directory paths to recurse into
+	q.PushBack(root)
+	for e := q.Front(); e != nil; e = q.Front() {
+		rpath := q.Remove(e).(string)
+		if children, err := readDir(c, rpath); err != nil {
+			return nil, err
+		} else {
+			for _, dir := range children {
+				full := path.Join(rpath, dir.Name)
+				if dir.IsDir {
+					q.PushBack(full)
+					continue
 				}
-				ch <- meta
-			}(d)
-		}
-		for i := 0; i < par; i++ {
-			<-limit
-		}
-		close(ch)
-		postCache = map[string]*PostData{}
-		var all []*PostData
-		for meta := range ch {
-			postCache[meta.Name] = meta
-			if (!draft && !meta.IsDraft() && !meta.NotInTOC) || (isOwner && draft) || meta.canRead(user) {
-				all = append(all, meta)
+				dir.Name = full // Substitute the name with complete path from root
+				r = append(r, dir)
 			}
 		}
-		sort.Sort(byTime(all))
-
-		if data, err := json.Marshal(postCache); err != nil {
-			c.Criticalf("marshal blogcache: %v", err)
-		} else if err := c.Write("blogcache", data); err != nil {
-			c.Criticalf("write blogcache: %v", err)
-		}
-
-		var buf bytes.Buffer
-		t := mainTemplate(c)
-		if err := t.Lookup("toc").Execute(&buf, &TocData{
-			User:      c.User(),
-			Draft:     draft,
-			HostURL:   hostURL(req),
-			DraftRoot: "/draft",
-			PostRoot:  "/",
-			Posts:     all,
-		}); err != nil {
-			panic(err)
-		}
-		data = buf.Bytes()
-		c.CacheStore(key, data)
 	}
+	return
+}
+
+// ☻ Rebuild the TOC page, used on cache misses in toc.
+func gentoc(w http.ResponseWriter, req *http.Request, key fs.CacheKey, draft, isOwner bool, user string) {
+	var data []byte
+	c := fs.NewContext(req)
+
+	// ☻ Traverse "/blog/post/..." and its descendants
+	dir, err := readDirEllipses(c, "blog/post")
+	if err != nil {
+		panic(err)
+	}
+
+	// ☻ If "readdir: 1" form field supplied, return number of files
+	if req.FormValue("readdir") == "1" {
+		fmt.Fprintf(w, "%d dir entries\n", len(dir))
+		return
+	}
+
+	// ☻ Read postName–>postData from file "/blogcache", if any available
+	postCache := map[string]*PostData{}
+	if data, _, err := c.Read("blogcache"); err == nil {
+		if err := json.Unmarshal(data, &postCache); err != nil {
+			c.Criticalf("unmarshal blogcache: %v", err)
+		}
+	}
+
+	ch := make(chan *PostData, len(dir)) // ☻ Create a channel whose buffer size equals the number of files in "blog/post"
+	// XXX: This is a limiting mechanism. Use limiter.
+	const par = 20
+	var limit = make(chan bool, par) // Insert 20 tickets
+	for i := 0; i < par; i++ {
+		limit <- true
+	}
+	//
+	for _, d := range dir { // For each file in directory,
+		if meta := postCache[d.Name]; meta != nil && // Attempt to fetch post meta from "blogcache" file cache; if present, and
+			meta.FileModTime.Equal(d.ModTime) && // The cache copy is not older than the original, and
+			meta.FileSize == d.Size { // They match in size
+			//
+			ch <- meta // Use the cached post meta
+			continue
+		}
+
+		<-limit
+		go func(d proto.FileInfo) { // Fetch post in parallel
+			defer func() { limit <- true }()
+			meta, _, err := loadPost(c, d.Name, req)
+			if err != nil {
+				// Should not happen: we just listed the directory.
+				c.Criticalf("loadPost %s: %v", d.Name, err)
+				return
+			}
+			ch <- meta
+		}(d)
+	}
+	for i := 0; i < par; i++ { // Wait for all post loads to complete
+		<-limit
+	}
+	close(ch) // Write eof
+
+	postCache = map[string]*PostData{} // ☻ Update postCache with the fresh data and apply permission/draft filters
+	var all []*PostData
+	for meta := range ch {
+		postCache[meta.Name] = meta
+		if (!draft && !meta.IsDraft() && !meta.NotInTOC) || (isOwner && draft) || meta.canRead(user) {
+			all = append(all, meta)
+		}
+	}
+	sort.Sort(byTime(all)) // ☻ Sort posts chronologically
+
+	if data, err := json.Marshal(postCache); err != nil { // ☻ Write new TOC cache to "/blogcache"
+		c.Criticalf("marshal blogcache: %v", err)
+	} else if err := c.Write("blogcache", data); err != nil {
+		c.Criticalf("write blogcache: %v", err)
+	}
+
+	var buf bytes.Buffer // ☻ Render TOC page
+	t := mainTemplate(c)
+	if err := t.Lookup("toc").Execute(&buf, &TocData{
+		User:      c.User(),
+		Draft:     draft,
+		HostURL:   hostURL(req),
+		DraftRoot: "/draft",
+		PostRoot:  "/",
+		Posts:     all,
+	}); err != nil {
+		panic(err)
+	}
+	data = buf.Bytes()
+	c.CacheStore(key, data)
+	//
 	w.Write(data)
 }
 
